@@ -1,22 +1,37 @@
-# jack-american-mode
-Active app: Jack American Mode — private source backup of Yuichi's advanced English-only fluency and voice coaching app hosted on ChatGPT Sites.
+# Jack American Mode
 
+Yuichi's advanced English-only voice coaching app, hosted on ChatGPT Sites.
 
-## Backup status — October 15, 2026
+## Backup status
 
-**Source import pending. This repository is not yet a complete application backup.**
+Source imported from `jack-american-mode-source-backup-2026-10-12.zip` on October 15, 2026. The export identifies Site version 16 and source commit `2c3b41d7b2dca781d4b0ffdc6acbab3cacc0feab`. Today's deployed version has not been compared with this export.
 
-This private repository is reserved for **Jack American Mode**. The app runs separately on ChatGPT Sites. Creating this GitHub repository does not automatically copy or synchronize the app's source.
+## Files explained
 
-The supplied source export is `jack-american-mode-source-backup-2026-10-12.zip` (October 12, 2026). Its contents still need to be inspected and imported; the ZIP's date alone does not establish that it matches the latest deployed app. Import was blocked by source-download connectivity on October 15.
+| Path | Purpose |
+| --- | --- |
+| `worker/index.js` | Application, screens, API handlers and voice integration |
+| `db/schema.ts` | Database structure |
+| `drizzle/` | Database migrations |
+| `scripts/` | Build, validation and smoke checks |
+| `.env.example` | Configuration names; no real API keys |
+| `.openai/hosting.json` | Sites hosting configuration |
+| `BACKUP_README.md` | Original export provenance and instructions |
 
-Before treating this backup as complete, import the source, assets, dependencies and safe configuration templates, verify the files against the supplied export, and document the actual startup/build commands. Keep real API keys, passwords, runtime data and personal financial records outside GitHub. Preserve this initial commit and the original export.
+## Verify locally
 
-## Yuichi's four apps
+With Node.js and Bash installed:
 
-| App | Repository | Backup status |
-| --- | --- | --- |
-| Yuichi AI Terminal | [yuichi-ai-terminal](https://github.com/braveoneu1-dot/yuichi-ai-terminal) | Source present; public |
-| Household Finance / Harbor | [household-finance-app](https://github.com/braveoneu1-dot/household-finance-app) | Private; source import pending |
-| Jackの英語ジャッジ | [jack-english-judge](https://github.com/braveoneu1-dot/jack-english-judge) | Source present; public |
-| Jack American Mode | [jack-american-mode](https://github.com/braveoneu1-dot/jack-american-mode) | Private; source import pending |
+```sh
+npm run build
+npm run validate
+node scripts/smoke.mjs
+```
+
+No third-party npm dependencies are declared. Keep real credentials in the hosting platform's secret store. A source backup does not restore API credits, runtime database contents, or hosting bindings. Sites and GitHub do not automatically synchronize.
+
+## Other active apps
+
+- [Yuichi AI Terminal](https://github.com/braveoneu1-dot/yuichi-ai-terminal)
+- [Household Finance / Harbor](https://github.com/braveoneu1-dot/household-finance-app)
+- [Jackの英語ジャッジ](https://github.com/braveoneu1-dot/jack-english-judge)

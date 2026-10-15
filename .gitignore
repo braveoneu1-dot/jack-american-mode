@@ -1,0 +1,15 @@
+dist/
+site.tar.gz
+node_modules/
+.sites-runtime/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
+
