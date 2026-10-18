@@ -390,24 +390,15 @@ async function coach(request,env){
   for(const key of ["praise","correction","local_version","why","spoken_feedback"])if(typeof result[key]!=="string"||!result[key].trim())return json({error:"Claude returned incomplete coaching."},502);
   return json({praise:result.praise.trim(),correction:result.correction.trim(),local_version:result.local_version.trim(),why:result.why.trim(),spoken_feedback:result.spoken_feedback.trim()});
 }
-let resolvedVoiceId="";
+// Yuichi's cloned ElevenLabs voice, "Jack". Spoken replies use this unless
+// the hosting setting ELEVENLABS_VOICE_ID is filled in with a different voice.
+const JACK_VOICE_ID="xgNMrMrzE7FHiO5UzToK";
+function configuredVoiceId(env){
+  const override=typeof env.ELEVENLABS_VOICE_ID==="string"?env.ELEVENLABS_VOICE_ID.trim():"";
+  return override.length>5?override:JACK_VOICE_ID;
+}
 async function resolveElevenLabsVoice(env){
-  if(typeof env.ELEVENLABS_VOICE_ID==="string"&&env.ELEVENLABS_VOICE_ID.length>5)return env.ELEVENLABS_VOICE_ID;
-  if(resolvedVoiceId)return resolvedVoiceId;
-  if(!env.ELEVENLABS_API_KEY)return "";
-  let response;
-  try{response=await fetch("https://api.elevenlabs.io/v2/voices?page_size=100&include_total_count=false",{headers:{"accept":"application/json","xi-api-key":env.ELEVENLABS_API_KEY}});}catch{return "";}
-  if(!response.ok)return "";
-  const payload=await response.json().catch(()=>({}));
-  const voices=Array.isArray(payload.voices)?payload.voices:[];
-  const score=voice=>{
-    const labels=voice?.labels||{};
-    const description=[voice?.name,voice?.description,labels.accent,labels.description,labels.use_case].filter(Boolean).join(" ").toLowerCase();
-    return (description.includes("american")?8:0)+(description.match(/warm|natural|conversational|expressive|friendly/g)||[]).length*2+(description.match(/narration|social|education|characters/g)||[]).length;
-  };
-  const selected=voices.filter(voice=>typeof voice?.voice_id==="string").sort((a,b)=>score(b)-score(a))[0];
-  resolvedVoiceId=selected?.voice_id||"";
-  return resolvedVoiceId;
+  return configuredVoiceId(env);
 }
 async function speech(request,env){
   if(!env.ELEVENLABS_API_KEY)return json({error:"Neural voice is not configured."},503);
@@ -514,18 +505,39 @@ async function elevenLabsError(response,fallback){
   const detail=typeof body?.detail==="string"?body.detail:(body?.detail?.message||body?.message||fallback);
   return String(detail||fallback).slice(0,280);
 }
+async function alignRealtimeAgentVoice(env,agentId,headers){
+  const voiceId=await resolveElevenLabsVoice(env);
+  let current;
+  try{current=await fetch(`https://api.elevenlabs.io/v1/convai/agents/${encodeURIComponent(agentId)}`,{headers});}
+  catch{throw new Error("ElevenLabs could not open the realtime coach.");}
+  if(!current.ok)throw new Error(await elevenLabsError(current,"ElevenLabs could not open the realtime coach."));
+  const agent=await current.json().catch(()=>({}));
+  if(agent?.conversation_config?.tts?.voice_id===voiceId)return agentId;
+  let updated;
+  try{updated=await fetch(`https://api.elevenlabs.io/v1/convai/agents/${encodeURIComponent(agentId)}`,{method:"PATCH",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({conversation_config:{tts:{voice_id:voiceId}}})});}
+  catch{throw new Error("ElevenLabs could not switch the coach to the selected voice.");}
+  if(!updated.ok)throw new Error(await elevenLabsError(updated,"ElevenLabs could not switch the coach to the selected voice."));
+  return agentId;
+}
 async function ensureRealtimeAgent(env){
-  if(typeof env.ELEVENLABS_AGENT_ID==="string"&&env.ELEVENLABS_AGENT_ID.length>5)return env.ELEVENLABS_AGENT_ID;
   if(cachedRealtimeAgentId)return cachedRealtimeAgentId;
   if(!env.ELEVENLABS_API_KEY)throw new Error("ElevenLabs is not configured.");
   const headers={"accept":"application/json","xi-api-key":env.ELEVENLABS_API_KEY};
-  let list;
-  try{list=await fetch(`https://api.elevenlabs.io/v1/convai/agents?page_size=20&search=${encodeURIComponent(realtimeAgentName)}&created_by_user_id=%40me`,{headers});}
-  catch{throw new Error("ElevenLabs Agents could not be reached.");}
-  if(!list.ok)throw new Error(await elevenLabsError(list,"Your ElevenLabs key needs Agents read/write access."));
-  const listed=await list.json().catch(()=>({}));
-  const existing=(Array.isArray(listed.agents)?listed.agents:[]).find(agent=>agent?.name===realtimeAgentName&&typeof agent?.agent_id==="string");
-  if(existing){cachedRealtimeAgentId=existing.agent_id;return cachedRealtimeAgentId;}
+  const pinned=typeof env.ELEVENLABS_AGENT_ID==="string"&&env.ELEVENLABS_AGENT_ID.trim().length>5?env.ELEVENLABS_AGENT_ID.trim():"";
+  let agentId=pinned;
+  if(!agentId){
+    let list;
+    try{list=await fetch(`https://api.elevenlabs.io/v1/convai/agents?page_size=20&search=${encodeURIComponent(realtimeAgentName)}&created_by_user_id=%40me`,{headers});}
+    catch{throw new Error("ElevenLabs Agents could not be reached.");}
+    if(!list.ok)throw new Error(await elevenLabsError(list,"Your ElevenLabs key needs Agents read/write access."));
+    const listed=await list.json().catch(()=>({}));
+    const existing=(Array.isArray(listed.agents)?listed.agents:[]).find(agent=>agent?.name===realtimeAgentName&&typeof agent?.agent_id==="string");
+    if(existing)agentId=existing.agent_id;
+  }
+  if(agentId){
+    await alignRealtimeAgentVoice(env,agentId,headers);
+    cachedRealtimeAgentId=agentId;return cachedRealtimeAgentId;
+  }
   const voiceId=await resolveElevenLabsVoice(env);
   if(!voiceId)throw new Error("No ElevenLabs voice is available for the realtime coach.");
   const configuration={
