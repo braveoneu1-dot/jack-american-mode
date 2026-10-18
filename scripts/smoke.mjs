@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import worker from "../worker/index.js";
 
 const page = await worker.fetch(new Request("https://example.test/"), {}, {});
@@ -40,14 +41,20 @@ assert.match(await serviceWorkerResponse.text(), /skipWaiting/);
 const health = await worker.fetch(new Request("https://example.test/api/health"), { ANTHROPIC_API_KEY: "secret-test-key" }, {});
 assert.deepEqual(await health.json(), { configured: true, voiceConfigured: false });
 
+const JACK_VOICE_ID = "xgNMrMrzE7FHiO5UzToK";
+const speechUrls = [];
+let listedVoices = false;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (_url, options = {}) => {
-  if (String(_url).includes("/v2/voices")) return new Response(JSON.stringify({ voices: [
-    { voice_id: "voice-british", name: "Formal Narrator", labels: { accent: "British" } },
-    { voice_id: "voice-american", name: "Warm Coach", description: "Natural and conversational", labels: { accent: "American" } }
-  ] }), { status: 200, headers: { "content-type": "application/json" } });
+  if (String(_url).includes("/v2/voices")) {
+    listedVoices = true;
+    return new Response(JSON.stringify({ voices: [
+      { voice_id: "voice-british", name: "Formal Narrator", labels: { accent: "British" } },
+      { voice_id: "voice-american", name: "Warm Coach", description: "Natural and conversational", labels: { accent: "American" } }
+    ] }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   if (String(_url).includes("/text-to-speech/")) {
-    assert.match(String(_url), /voice-american/);
+    speechUrls.push(String(_url));
     return new Response(new Uint8Array([73, 68, 51]), { status: 200, headers: { "content-type": "audio/mpeg" } });
   }
   if (String(_url).includes("/v1/convai/agents?")) return new Response(JSON.stringify({ agents: [] }), { status: 200, headers: { "content-type": "application/json" } });
@@ -60,7 +67,7 @@ globalThis.fetch = async (_url, options = {}) => {
     assert.equal(configuration.conversation_config.turn.turn_eagerness, "eager");
     assert.equal(configuration.conversation_config.turn.speculative_turn, true);
     assert.match(configuration.conversation_config.agent.prompt.prompt, /\{\{topic_memory\}\}/);
-    assert.equal(configuration.conversation_config.tts.voice_id, "voice-american");
+    assert.equal(configuration.conversation_config.tts.voice_id, JACK_VOICE_ID);
     assert.equal(configuration.conversation_config.tts.model_id, "eleven_flash_v2");
     return new Response(JSON.stringify({ agent_id: "agent-jack-realtime" }), { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -105,6 +112,15 @@ const spoken = await worker.fetch(new Request("https://example.test/api/speech",
 }), { ELEVENLABS_API_KEY: "eleven-secret-test-key" }, {});
 assert.equal(spoken.status, 200);
 assert.equal(spoken.headers.get("content-type"), "audio/mpeg");
+assert.equal(listedVoices, false);
+assert.match(speechUrls[0], new RegExp(`/text-to-speech/${JACK_VOICE_ID}/stream`));
+const overridden = await worker.fetch(new Request("https://example.test/api/speech", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ text: "This uses the hosting override." })
+}), { ELEVENLABS_API_KEY: "eleven-secret-test-key", ELEVENLABS_VOICE_ID: "voice-override-id" }, {});
+assert.equal(overridden.status, 200);
+assert.match(speechUrls[1], /\/text-to-speech\/voice-override-id\/stream/);
 const realtime = await worker.fetch(new Request("https://example.test/api/realtime-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ topic: "work", transport: "websocket" }) }), {
   ELEVENLABS_API_KEY: "eleven-secret-test-key"
 }, {});
@@ -174,5 +190,83 @@ const createdTopicBody = await createdTopic.json();
 assert.match(createdTopicBody.topic.key, /^custom-tesla-/);
 const listedTopics = await worker.fetch(new Request("https://example.test/api/topics"), { DB: topicsDb }, {});
 assert.deepEqual((await listedTopics.json()).topics[0].label, "Tesla");
+
+const workerSource = await readFile(new URL("../worker/index.js", import.meta.url), "utf8");
+async function loadFreshWorker(label) {
+  const href = `data:text/javascript;base64,${Buffer.from(`${workerSource}\n/* ${label} */`).toString("base64")}`;
+  return import(href);
+}
+function jsonResponse(body) {
+  return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+}
+function mockExistingAgent({ agents, currentVoiceId, expectedVoiceId }) {
+  const patches = [];
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+    const method = options.method || "GET";
+    calls.push(`${method} ${href}`);
+    if (href.includes("/v1/convai/agents?") && !href.includes("/v1/convai/agents/create")) return jsonResponse({ agents });
+    const agentMatch = href.match(/\/v1\/convai\/agents\/([^/?]+)$/);
+    if (agentMatch && method === "GET") return jsonResponse({ agent_id: decodeURIComponent(agentMatch[1]), conversation_config: { tts: { voice_id: currentVoiceId, model_id: "eleven_flash_v2" } } });
+    if (agentMatch && method === "PATCH") {
+      const body = JSON.parse(options.body);
+      patches.push({ agentId: decodeURIComponent(agentMatch[1]), body });
+      assert.deepEqual(body, { conversation_config: { tts: { voice_id: expectedVoiceId } } });
+      return jsonResponse({ agent_id: agentMatch[1] });
+    }
+    if (href.includes("/v1/convai/conversation/get-signed-url")) {
+      assert.match(href, /agent_id=/);
+      return jsonResponse({ signed_url: "wss://api.elevenlabs.io/test-signed-session" });
+    }
+    throw new Error(`Unexpected ElevenLabs call ${method} ${href}`);
+  };
+  return { patches, calls };
+}
+async function startRealtime(workerModule, env) {
+  return workerModule.default.fetch(new Request("https://example.test/api/realtime-token", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ topic: "work", transport: "websocket" })
+  }), env, {});
+}
+const existingWorker = await loadFreshWorker("existing-agent");
+const existing = mockExistingAgent({
+  agents: [{ agent_id: "agent-existing", name: "Jack American Mode — Mobile Fast" }],
+  currentVoiceId: "old-library-voice",
+  expectedVoiceId: JACK_VOICE_ID
+});
+const existingSession = await startRealtime(existingWorker, { ELEVENLABS_API_KEY: "eleven-secret-test-key" });
+assert.equal(existingSession.status, 200);
+assert.deepEqual(await existingSession.json(), { signedUrl: "wss://api.elevenlabs.io/test-signed-session", token: null, conversationId: null, topic: "work", label: "Work", memoryText: "No earlier memory exists for this topic.", hasMemory: false });
+assert.deepEqual(existing.patches, [{ agentId: "agent-existing", body: { conversation_config: { tts: { voice_id: JACK_VOICE_ID } } } }]);
+const repeatSession = await startRealtime(existingWorker, { ELEVENLABS_API_KEY: "eleven-secret-test-key" });
+assert.equal(repeatSession.status, 200);
+assert.equal(existing.patches.length, 1);
+
+const sameVoiceWorker = await loadFreshWorker("same-voice");
+const sameVoice = mockExistingAgent({
+  agents: [{ agent_id: "agent-existing", name: "Jack American Mode — Mobile Fast" }],
+  currentVoiceId: JACK_VOICE_ID,
+  expectedVoiceId: JACK_VOICE_ID
+});
+assert.equal((await startRealtime(sameVoiceWorker, { ELEVENLABS_API_KEY: "eleven-secret-test-key" })).status, 200);
+assert.equal(sameVoice.patches.length, 0);
+assert.ok(sameVoice.calls.some(call => call.startsWith("GET ") && call.includes("/v1/convai/agents/agent-existing")));
+
+const pinnedWorker = await loadFreshWorker("pinned-agent");
+const pinned = mockExistingAgent({
+  agents: [{ agent_id: "agent-other", name: "Jack American Mode — Mobile Fast" }],
+  currentVoiceId: "old-library-voice",
+  expectedVoiceId: "voice-override-id"
+});
+assert.equal((await startRealtime(pinnedWorker, {
+  ELEVENLABS_API_KEY: "eleven-secret-test-key",
+  ELEVENLABS_AGENT_ID: "agent-pinned",
+  ELEVENLABS_VOICE_ID: "voice-override-id"
+})).status, 200);
+assert.deepEqual(pinned.patches, [{ agentId: "agent-pinned", body: { conversation_config: { tts: { voice_id: "voice-override-id" } } } }]);
+assert.equal(pinned.calls.some(call => call.includes("/v1/convai/agents?")), false);
+
 globalThis.fetch = originalFetch;
 console.log("Worker smoke test passed");
