@@ -115,8 +115,8 @@ const realtimeEnhancement=`
 <script type="module">
 import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@1.10.0/+esm';
 const byId=id=>document.getElementById(id);
-let liveConversation=null,micMuted=false,selectedTopic='open',selectedLabel='Open conversation',loadedMemory=null,sessionTurns=[],wakeLock=null;
-let iosAudioPrimer=null,connectTimer=null;
+let liveConversation=null,pendingConversation=null,micMuted=false,selectedTopic='open',selectedLabel='Open conversation',loadedMemory=null,sessionTurns=[],wakeLock=null;
+let iosAudioPrimer=null,connectTimer=null,micPermissionStream=null,micMonitorTimer=null,micRecoveryAttempted=false,micSignalSeen=false;
 const startButton=byId('startRealtime'),muteButton=byId('muteRealtime'),resetButton=byId('resetRealtime'),refreshButton=byId('refreshApp'),floatingEndButton=byId('floatingEndRealtime'),orb=byId('voiceOrb');
 const defaultRealtimeNote='English or Japanese is fine—Jack keeps the learning target American English. Uses your ElevenLabs free minutes.';
 const profileStorageKey='jack_private_profile_v1';
@@ -217,9 +217,37 @@ function messageParts(event){
   const text=typeof event?.message==='string'?event.message:(event?.message?.message||event?.text||event?.transcript||'');
   return{source:/user/i.test(source)?'user':'agent',text};
 }
+function releaseMicPermissionStream(){
+  if(!micPermissionStream)return;
+  for(const track of micPermissionStream.getTracks())try{track.stop();}catch{}
+  micPermissionStream=null;
+}
+function stopMicMonitor(){clearInterval(micMonitorTimer);micMonitorTimer=null;micRecoveryAttempted=false;micSignalSeen=false;}
+function startMicMonitor(conversation){
+  stopMicMonitor();let quietChecks=0,busy=false;
+  micMonitorTimer=setInterval(async()=>{
+    if(conversation!==liveConversation){stopMicMonitor();return;}
+    let volume=0;try{volume=Number(conversation.getInputVolume?.()||0);}catch{}
+    if(volume>0.012){
+      quietChecks=0;
+      if(!micSignalSeen){micSignalSeen=true;byId('realtimeNote').textContent='MICROPHONE LIVE · Jack can hear you, even while he is speaking.';}
+      return;
+    }
+    quietChecks+=1;
+    if(!isIosSafari||micMuted||micSignalSeen||micRecoveryAttempted||quietChecks<24||busy)return;
+    busy=true;micRecoveryAttempted=true;setLiveState('MIC CHECK','Refreshing the iPhone microphone…');
+    try{
+      await conversation.changeInputDevice({});conversation.setMicMuted(false);micMuted=false;muteButton.textContent='MUTE MIC';
+      byId('realtimeNote').textContent='MICROPHONE REFRESHED · Say “hey Jack” again.';setLiveState('LISTENING','Speak now—you can interrupt Jack.');
+    }catch(error){
+      console.error('Jack microphone recovery failed',{error,detail:errorDetail(error)});
+      byId('realtimeNote').textContent='The microphone stayed silent. In iPhone Settings, allow Safari microphone access, then tap Reset. '+errorDetail(error);
+    }finally{busy=false;}
+  },250);
+}
 async function stopConversation(){
   clearTimeout(connectTimer);connectTimer=null;
-  const active=liveConversation;liveConversation=null;
+  stopMicMonitor();releaseMicPermissionStream();const active=liveConversation||pendingConversation;liveConversation=null;pendingConversation=null;
   try{if(active)await active.endSession();}catch{}
   try{await wakeLock?.release();}catch{}wakeLock=null;
   try{await iosAudioPrimer?.close();}catch{}iosAudioPrimer=null;
@@ -231,7 +259,7 @@ async function stopConversation(){
 }
 async function resetConversation(){
   await stopConversation();
-  liveConversation=null;clearTimeout(connectTimer);connectTimer=null;lockTopics(false);
+  liveConversation=null;pendingConversation=null;stopMicMonitor();releaseMicPermissionStream();clearTimeout(connectTimer);connectTimer=null;lockTopics(false);
   startButton.disabled=false;startButton.textContent='START';startButton.classList.remove('danger');
   floatingEndButton?.classList.add('hidden');document.body.classList.remove('realtime-active');
   muteButton.classList.add('hidden');micMuted=false;byId('realtimeNote').textContent=defaultRealtimeNote;
@@ -252,14 +280,12 @@ async function startConversation(){
   startButton.disabled=true;lockTopics(true);startButton.textContent='CONNECTING…';setLiveState('CONNECTING','Opening a private realtime voice session.');
   try{
     if(!navigator.mediaDevices?.getUserMedia)throw new Error('Microphone access is not supported here. Open the app in Safari or Chrome and allow microphone access.');
-    let permissionStream;
-    try{permissionStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});}
+    try{micPermissionStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:{ideal:1}}});}
     catch(micError){
       if(micError?.name==='NotAllowedError'||micError?.name==='SecurityError')throw new Error('Microphone access was blocked. Allow the microphone for this site in your browser settings, then tap Reset and Start.');
       if(micError?.name==='NotFoundError'||micError?.name==='DevicesNotFoundError')throw new Error('No microphone was found. Connect or enable a microphone, then tap Reset and Start.');
       throw new Error('The microphone could not start: '+errorDetail(micError));
     }
-    permissionStream.getTracks().forEach(track=>track.stop());
     try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}
     sessionTurns=[];
     const response=await profileFetch('/api/realtime-token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({topic:selectedTopic,transport:'websocket'})});
@@ -268,22 +294,24 @@ async function startConversation(){
     if(data.setupNotice)byId('realtimeNote').textContent=safeDiagnostic(data.setupNotice);
     const sessionPromise=Conversation.startSession({
       signedUrl:data.signedUrl,connectionType:'websocket',dynamicVariables:{current_topic:selectedLabel,topic_memory:data.memoryText||'No earlier memory exists for this topic.'},
-      onConnect:()=>{clearTimeout(connectTimer);connectTimer=null;startButton.disabled=false;startButton.textContent='END CONVERSATION';startButton.classList.add('danger');floatingEndButton?.classList.remove('hidden');document.body.classList.add('realtime-active');muteButton.classList.remove('hidden');setLiveState('LISTENING',isIosSafari?'Jack is waking up his iPhone voice…':'Jack is live. Speak naturally.');},
+      onConversationCreated:conversation=>{pendingConversation=conversation;conversation.setMicMuted(false);releaseMicPermissionStream();},
+      onConnect:()=>{clearTimeout(connectTimer);connectTimer=null;startButton.disabled=false;startButton.textContent='END CONVERSATION';startButton.classList.add('danger');floatingEndButton?.classList.remove('hidden');document.body.classList.add('realtime-active');muteButton.classList.remove('hidden');byId('realtimeNote').textContent='MIC CHECK · Say “hey Jack.” You can talk over him while he is speaking.';setLiveState('LISTENING',isIosSafari?'Jack is waking up his iPhone voice…':'Jack is live. Speak naturally.');},
       onDisconnect:()=>{if(liveConversation)stopConversation();},
       onMessage:event=>{const message=messageParts(event);addLine(message.source,message.text);},
       onStatusChange:event=>{const status=typeof event==='string'?event:event?.status;if(status==='connecting')setLiveState('CONNECTING','Opening Jack’s voice channel.');},
       onModeChange:event=>{const mode=typeof event==='string'?event:event?.mode;if(mode==='speaking')setLiveState('SPEAKING','Jump in whenever you want—Jack can be interrupted.');else if(mode==='listening')setLiveState('LISTENING','Your turn.');else if(mode==='thinking'||mode==='processing')setLiveState('THINKING','Jack is forming a quick response.');},
-      onError:error=>{showRealtimeError(error,'ElevenLabs Conversation.onError');}
+      onError:(message,context)=>{const error=message instanceof Error?message:new Error(String(message||'ElevenLabs realtime error.'),context?{cause:context}:undefined);showRealtimeError(error,'ElevenLabs Conversation.onError');}
     });
     const timeoutPromise=new Promise((_,reject)=>{connectTimer=setTimeout(()=>reject(new Error('Jack could not establish the voice connection within 30 seconds.')),30000);});
-    liveConversation=await Promise.race([sessionPromise,timeoutPromise]);
+    liveConversation=await Promise.race([sessionPromise,timeoutPromise]);pendingConversation=null;releaseMicPermissionStream();liveConversation.setMicMuted(false);startMicMonitor(liveConversation);
     if(isIosSafari&&liveConversation){
       setTimeout(()=>{if(liveConversation){liveConversation.sendUserMessage(iosKickstart);setLiveState('LISTENING','Jack is live. Speak naturally.');}},450);
     }
   }catch(error){
     console.error('Jack startConversation failed',{error,detail:errorDetail(error),server:error?.server||null,status:error?.status||null});
-    clearTimeout(connectTimer);connectTimer=null;
-    liveConversation=null;startButton.disabled=false;startButton.innerHTML='TRY AGAIN <span>→</span>';startButton.classList.remove('danger');
+    clearTimeout(connectTimer);connectTimer=null;stopMicMonitor();releaseMicPermissionStream();
+    const failed=pendingConversation;pendingConversation=null;liveConversation=null;try{await failed?.endSession();}catch{}
+    startButton.disabled=false;startButton.innerHTML='TRY AGAIN <span>→</span>';startButton.classList.remove('danger');
     floatingEndButton?.classList.add('hidden');document.body.classList.remove('realtime-active');
     lockTopics(false);
     setLiveState('COULD NOT CONNECT','Your regular coaching modes still work.');byId('realtimeNote').textContent=errorDetail(error);
