@@ -128,7 +128,7 @@ function getProfileId(){
   if(!/^anon_[a-f0-9]{36}$/.test(value)){value=createProfileId();try{localStorage.setItem(profileStorageKey,value);}catch{}}
   return value;
 }
-const profileId=getProfileId();
+let profileId=getProfileId();
 function profileFetch(url,options={}){
   const headers=new Headers(options.headers||{});headers.set('x-jack-profile-id',profileId);
   return fetch(url,{...options,headers});
@@ -164,6 +164,20 @@ function showRealtimeError(error,source){
 async function loadProfileBadge(){
   try{const response=await profileFetch('/api/profile');const data=await response.json();if(response.ok)byId('profileBadge').textContent=(data.kind==='account'?'SYNCED PROFILE · ':'PRIVATE DEVICE ID · ')+data.code;}
   catch{byId('profileBadge').textContent='PRIVATE DEVICE PROFILE';}
+}
+async function runProfileAction(scope){
+  const progressButton=byId('resetProfileProgress'),newIdButton=byId('createNewProfile'),status=byId('profileActionStatus');
+  progressButton.disabled=true;newIdButton.disabled=true;status.textContent=scope==='all'?'DELETING THIS PROFILE…':'CLEARING PROGRESS…';
+  try{
+    const response=await profileFetch('/api/profile-data',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({scope})});
+    const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'Profile data could not be cleared.');
+    try{localStorage.removeItem('americanModeProgress');}catch{}
+    if(scope==='all'){
+      profileId=createProfileId();try{localStorage.setItem(profileStorageKey,profileId);}catch{}
+      status.textContent='NEW PRIVATE ID CREATED.';
+    }else status.textContent='PROGRESS RESET. YOUR ID IS UNCHANGED.';
+    setTimeout(()=>location.reload(),550);
+  }catch(error){status.textContent=errorDetail(error).toUpperCase();progressButton.disabled=false;newIdButton.disabled=false;}
 }
 const isIosSafari=/iP(?:hone|ad|od)/.test(navigator.userAgent)&&/WebKit/.test(navigator.userAgent);
 const iosKickstart='Start our conversation now with one short, friendly question.';
@@ -335,6 +349,9 @@ startButton?.addEventListener('click',startConversation);
 floatingEndButton?.addEventListener('click',stopConversation);
 resetButton?.addEventListener('click',resetConversation);
 refreshButton?.addEventListener('click',()=>location.reload());
+byId('profileBadge')?.addEventListener('click',()=>byId('profileManager')?.showModal());
+byId('resetProfileProgress')?.addEventListener('click',()=>runProfileAction('progress'));
+byId('createNewProfile')?.addEventListener('click',()=>runProfileAction('all'));
 muteButton?.addEventListener('click',()=>{if(!liveConversation)return;micMuted=!micMuted;liveConversation.setMicMuted(micMuted);muteButton.textContent=micMuted?'UNMUTE MIC':'MUTE MIC';setLiveState(micMuted?'MIC MUTED':'LISTENING',micMuted?'Jack cannot hear you.':'Your turn.');});
 document.querySelectorAll('.nav-item').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.mode!=='analogy'&&liveConversation)stopConversation();}));
 document.addEventListener('visibilitychange',async()=>{if(document.visibilityState==='visible'&&liveConversation&&!wakeLock)try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}});
@@ -453,8 +470,22 @@ main{grid-column:2}.topbar{height:72px;padding:0 clamp(24px,4vw,58px);border-bot
 .toast{border-radius:14px;background:#172033;color:#fff;box-shadow:0 15px 40px rgba(23,32,51,.26)}
 @media(max-width:800px){body{padding-bottom:calc(102px + env(safe-area-inset-bottom) + var(--browser-bottom-gap,0px));background:radial-gradient(circle at 80% 0,rgba(99,91,255,.13),transparent 25%),var(--warm-bg)}.rail{inset:auto 12px calc(10px + env(safe-area-inset-bottom) + var(--browser-bottom-gap,0px)) 12px;width:auto;height:62px;padding:7px;background:rgba(255,255,255,.92);border:1px solid rgba(23,32,51,.08);border-radius:21px;box-shadow:0 12px 36px rgba(31,47,70,.18);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.mode-nav{height:46px;gap:6px}.nav-item{min-width:0;min-height:46px;padding:7px 4px;border-radius:15px}.nav-item b{font-size:0;line-height:1;white-space:nowrap}.nav-item b br{display:none}.nav-item b:after{font-size:.76rem;font-weight:700;line-height:1}.nav-item[data-mode="pressure"] b:after{content:"Coach"}.nav-item[data-mode="upgrade"] b:after{content:"Rewrite"}.nav-item[data-mode="analogy"] b:after{content:"Talk"}.nav-item.active{background:linear-gradient(135deg,var(--warm-blue),#5364ef)}.topbar{background:rgba(243,246,251,.82);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}.workspace{width:calc(100% - 28px);padding-top:22px;padding-bottom:90px}.session-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}.session-head>div:first-child{min-width:0}.session-head h1{font-size:2.05rem;line-height:1;max-width:100%}.session-count strong{font-size:1.5rem}.session-count span{font-size:.78rem}.topic-memory{padding:17px}.topic-list{display:flex;flex-wrap:nowrap;overflow-x:auto;padding-bottom:3px;scrollbar-width:none}.topic-list::-webkit-scrollbar{display:none}.topic-chip{white-space:nowrap;min-height:42px}.scenario-card,.rewrite-card,.response-zone,.realtime-stage{border-radius:24px}.rewrite-tools{gap:12px}.rewrite-tools .primary{flex:1;min-width:0;white-space:normal;line-height:1.2}.realtime-copy{padding:27px 22px}.realtime-copy h2{font-size:2.25rem}.voice-orb-wrap{min-height:245px}.voice-orb{width:126px;height:126px}.mobile-install{bottom:calc(84px + env(safe-area-inset-bottom) + var(--browser-bottom-gap,0px));border-radius:20px;background:#fff;color:var(--warm-text);box-shadow:0 16px 45px rgba(31,47,70,.18)}.mobile-install button{border-color:#cad4e0;color:var(--warm-blue);border-radius:10px}}
 </style>`;
+const profileManager=`<dialog class="profile-manager" id="profileManager">
+  <form method="dialog" class="profile-manager-card">
+    <div class="profile-manager-head"><div><span>PRIVATE PROFILE</span><h2>Your data. Your call.</h2></div><button class="profile-close" value="cancel" aria-label="Close profile settings">×</button></div>
+    <p class="profile-manager-copy">Choose what Jack forgets. These actions never affect another user.</p>
+    <div class="profile-action-row"><div><strong>Reset progress</strong><small>Clear your streak and saved conversation memory. Keep this private ID and custom topics.</small></div><button type="button" id="resetProfileProgress">RESET PROGRESS</button></div>
+    <div class="profile-action-row danger"><div><strong>Create a new ID</strong><small>Delete this profile’s memory and custom topics, then start again with a fresh anonymous ID.</small></div><button type="button" id="createNewProfile">CREATE NEW ID</button></div>
+    <p class="profile-action-status" id="profileActionStatus" aria-live="polite"></p>
+  </form>
+</dialog>`;
 const profileEnhancement=`<style>
-.profile-badge{display:inline-flex;align-items:center;margin-left:20px;padding:7px 10px;border:1px solid rgba(89,105,220,.18);border-radius:999px;background:rgba(255,255,255,.72);color:#5969dc;font-size:.62rem;font-weight:800;letter-spacing:.055em;white-space:nowrap}
+.profile-badge{display:inline-flex;align-items:center;margin-left:20px;padding:7px 10px;border:1px solid rgba(89,105,220,.18);border-radius:999px;background:rgba(255,255,255,.72);color:#5969dc;font-size:.62rem;font-weight:800;letter-spacing:.055em;white-space:nowrap;cursor:pointer}
+.profile-badge:hover{background:#fff;border-color:rgba(89,105,220,.34)}
+.profile-manager{width:min(600px,calc(100% - 28px));border:0;border-radius:28px;padding:0;background:transparent;color:var(--warm-text)}
+.profile-manager::backdrop{background:rgba(18,27,46,.42);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.profile-manager-card{padding:30px;border:1px solid rgba(255,255,255,.78);border-radius:28px;background:rgba(255,255,255,.96);box-shadow:0 30px 90px rgba(23,32,51,.28)}
+.profile-manager-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.profile-manager-head span{color:var(--warm-blue);font-size:.65rem;font-weight:850;letter-spacing:.12em}.profile-manager-head h2{margin:7px 0 0;font-size:2rem;letter-spacing:-.045em}.profile-close{width:40px;height:40px;border:1px solid #d9e1eb;border-radius:50%;background:#f5f7fb;color:#66748a;font-size:1.45rem;line-height:1}.profile-manager-copy{margin:12px 0 22px;color:var(--warm-muted);line-height:1.55}.profile-action-row{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;padding:18px 0;border-top:1px solid #e3e8ef}.profile-action-row strong,.profile-action-row small{display:block}.profile-action-row strong{font-size:.95rem}.profile-action-row small{max-width:360px;margin-top:5px;color:#7b8798;font-size:.78rem;line-height:1.45}.profile-action-row button{min-height:42px;padding:0 14px;border:1px solid #b9c6d8;border-radius:12px;background:#f7f9fc;color:#5363e8;font-size:.66rem;font-weight:850;letter-spacing:.06em}.profile-action-row.danger button{border-color:#ffd0c4;background:#fff3ef;color:#d85839}.profile-action-row button:disabled{opacity:.55;cursor:wait}.profile-action-status{min-height:1.2em;margin:8px 0 0;color:#68778a;font-size:.76rem;font-weight:700}
 .floating-refresh{position:fixed;right:20px;top:92px;z-index:35;display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:0 13px;border:1px solid rgba(23,32,51,.10);border-radius:999px;background:rgba(255,255,255,.88);color:#526177;font-size:.62rem;font-weight:800;letter-spacing:.055em;box-shadow:0 8px 24px rgba(31,47,70,.12);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:transform .2s ease,background .2s ease,box-shadow .2s ease}
 .floating-refresh span{font-size:1rem;line-height:1}
 .floating-refresh:hover{transform:translateY(-2px);background:#fff;box-shadow:0 12px 30px rgba(31,47,70,.18)}
@@ -464,7 +495,7 @@ const profileEnhancement=`<style>
 .floating-end:hover{transform:translateY(-2px);background:#fff;box-shadow:0 18px 46px rgba(23,32,51,.24)}
 .floating-end:focus-visible{outline:3px solid rgba(24,119,242,.28);outline-offset:3px}
 .realtime-active .mobile-install{display:none!important}
-@media(max-width:800px){.profile-badge{order:2;margin:0 10px 0 0;padding:6px 9px;font-size:.56rem}.floating-refresh{top:calc(68px + env(safe-area-inset-top));right:12px;min-height:36px;padding:0 11px;background:rgba(255,255,255,.94)}.floating-refresh:hover{transform:none}.floating-end{left:14px;right:14px;bottom:calc(84px + env(safe-area-inset-bottom) + var(--browser-bottom-gap,0px));width:calc(100% - 28px);min-height:56px;background:rgba(23,32,51,.96);color:#fff;border-color:rgba(255,255,255,.10);box-shadow:0 16px 42px rgba(23,32,51,.28)}.floating-end:hover{transform:none;background:#172033}}
+@media(max-width:800px){.profile-badge{order:2;margin:0 10px 0 0;padding:6px 9px;font-size:.56rem}.profile-manager-card{padding:22px 18px}.profile-manager-head h2{font-size:1.65rem}.profile-action-row{grid-template-columns:1fr}.profile-action-row button{width:100%;min-height:46px}.floating-refresh{top:calc(68px + env(safe-area-inset-top));right:12px;min-height:36px;padding:0 11px;background:rgba(255,255,255,.94)}.floating-refresh:hover{transform:none}.floating-end{left:14px;right:14px;bottom:calc(84px + env(safe-area-inset-bottom) + var(--browser-bottom-gap,0px));width:calc(100% - 28px);min-height:56px;background:rgba(23,32,51,.96);color:#fff;border-color:rgba(255,255,255,.10);box-shadow:0 16px 42px rgba(23,32,51,.28)}.floating-end:hover{transform:none;background:#172033}}
 </style>`;
 const appManifest={name:"Jack: American Mode",short_name:"Jack AM",description:"Private American English voice coaching.",start_url:"/",scope:"/",display:"standalone",orientation:"portrait-primary",background_color:"#111c35",theme_color:"#111c35",icons:[{src:"/app-icon-v3-192.png",sizes:"192x192",type:"image/png",purpose:"any maskable"},{src:"/app-icon-v3-512.png",sizes:"512x512",type:"image/png",purpose:"any maskable"}]};
 const appIconSvg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="64" y1="24" x2="452" y2="488" gradientUnits="userSpaceOnUse"><stop stop-color="#172554"/><stop offset=".48" stop-color="#111C35"/><stop offset="1" stop-color="#080D18"/></linearGradient><radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(388 92) rotate(132) scale(330)"><stop stop-color="#536DFF" stop-opacity=".7"/><stop offset="1" stop-color="#536DFF" stop-opacity="0"/></radialGradient><linearGradient id="accent" x1="108" x2="404" gradientUnits="userSpaceOnUse"><stop stop-color="#FF6B35"/><stop offset="1" stop-color="#FF9A62"/></linearGradient></defs><rect width="512" height="512" fill="url(#bg)"/><rect width="512" height="512" fill="url(#glow)"/><circle cx="424" cy="92" r="12" fill="#FF7A45"/><text x="247" y="329" text-anchor="middle" fill="#F8FAFC" font-family="DejaVu Sans,Arial,sans-serif" font-size="190" font-weight="800" letter-spacing="-20">AM</text><rect x="108" y="369" width="296" height="13" rx="6.5" fill="url(#accent)"/><g fill="#93A4C7"><rect x="208" y="414" width="12" height="24" rx="6"/><rect x="232" y="402" width="12" height="36" rx="6"/><rect x="256" y="393" width="12" height="45" rx="6"/><rect x="280" y="406" width="12" height="32" rx="6"/></g></svg>`;
@@ -479,8 +510,8 @@ const serviceWorker=`self.addEventListener('install',event=>event.waitUntil(self
 const enhancedPage=page
   .replace(/<section class="workspace" id="analogyPanel">[\s\S]*?<\/section>\s*<\/main>/,realtimePanel+'</main>')
   .replace('<b>Coach My<br/>English</b>','<b>Live<br/>Conversation</b>')
-  .replace('<div class="date" id="today"></div>','<span class="profile-badge" id="profileBadge">CREATING PRIVATE PROFILE…</span><div class="date" id="today"></div>')
-  .replace('</main>','</main><button type="button" class="floating-refresh" id="refreshApp" aria-label="Refresh app"><span aria-hidden="true">↻</span> REFRESH</button>')
+  .replace('<div class="date" id="today"></div>','<button type="button" class="profile-badge" id="profileBadge" aria-label="Manage private profile">CREATING PRIVATE PROFILE…</button><div class="date" id="today"></div>')
+  .replace('</main>','</main>'+profileManager+'<button type="button" class="floating-refresh" id="refreshApp" aria-label="Refresh app"><span aria-hidden="true">↻</span> REFRESH</button>')
   .replace("document.querySelector('.status').innerHTML='<i></i> '+(data.provider==='claude-fallback'?'CLAUDE FALLBACK':'DEEPSEEK ACTIVE');","document.querySelector('.status').innerHTML='<i></i> COACH READY';")
   .replace("document.querySelector('.status').innerHTML=\`<i></i> \${data.configured?(data.coachProvider||'AI').toUpperCase()+' READY':'AI COACH NOT CONFIGURED'}\`;","document.querySelector('.status').innerHTML='<i></i> '+(data.configured?'COACH READY':'COACH OFFLINE');")
   .replace("pressureIndex=(pressureIndex+1)%conversations.length","pressureIndex=nextBankIndex('pressure',pressureIndex,conversations.length)")
@@ -493,10 +524,10 @@ const enhancedPage=page
 const coachSystem="You are a warm, sharp American speaking coach, not a grader. The learner is an advanced Japanese English speaker aiming to sound locally American. Analyze only the learner transcript supplied as data. Preserve the learner's intended meaning, stance, personality, directness, and key details. Never replace the answer with a different ideal answer. Rewrite the full answer using as much of the original wording and structure as possible while making it natural, contemporary, concise, and locally American. Avoid forced slang, excessive politeness, canned encouragement, rubric language, and teacherly phrases such as 'your response was grammatically correct.' Give one specific piece of praise and correct only the single highest-value issue. Also write spoken_feedback as a warm 2–4 sentence reaction that a perceptive American friend would actually say aloud: begin naturally, mention the specific win, make the correction conversationally, and end by introducing or speaking the improved version. Use contractions and varied sentence rhythm. A little dry humor is welcome only when it fits. Do not read labels, scores, or headings. Never use, infer, store, or reveal the learner's real name. Return valid JSON only with exactly these string keys: praise, correction, local_version, why, spoken_feedback. The local_version must be a speakable full rewrite of the original response.";
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 function requestProfile(request){
-  const accountId=request.headers.get("oai-authenticated-user-id");
-  if(accountId)return{id:"account:"+accountId,kind:"account"};
   const deviceId=request.headers.get("x-jack-profile-id")||"";
-  return /^anon_[a-f0-9]{36}$/.test(deviceId)?{id:deviceId,kind:"device"}:null;
+  if(/^anon_[a-f0-9]{36}$/.test(deviceId))return{id:deviceId,kind:"device"};
+  const accountId=request.headers.get("oai-authenticated-user-id");
+  return accountId?{id:"account:"+accountId,kind:"account"}:null;
 }
 async function profileCode(profile){
   const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(profile.id));
@@ -505,6 +536,18 @@ async function profileCode(profile){
 async function getProfile(request){
   const profile=requestProfile(request);if(!profile)return json({error:"Private profile is missing."},400);
   return json({kind:profile.kind,code:await profileCode(profile)});
+}
+async function resetProfileData(request,env){
+  if(!env.DB)return json({error:"Profile storage is not configured."},503);
+  const profile=requestProfile(request);if(!profile)return json({error:"Private profile is missing."},400);
+  let body={};try{body=await request.json();}catch{}
+  const scope=body?.scope==="all"?"all":"progress";
+  try{
+    const statements=[env.DB.prepare("DELETE FROM profile_topic_memories WHERE profile_id = ?").bind(profile.id)];
+    if(scope==="all")statements.push(env.DB.prepare("DELETE FROM profile_conversation_topics WHERE profile_id = ?").bind(profile.id));
+    await env.DB.batch(statements);
+    return json({reset:true,scope});
+  }catch{return json({error:"Jack could not clear this profile right now."},503);}
 }
 function safeCoachPayload(value){
   if(!value||typeof value!=="object")return null;
@@ -822,6 +865,7 @@ export default{
     if(url.pathname==="/api/coach"&&request.method==="POST")return coach(request,env);
     if(url.pathname==="/api/speech"&&request.method==="POST")return speech(request,env);
     if(url.pathname==="/api/profile"&&request.method==="GET")return getProfile(request);
+    if(url.pathname==="/api/profile-data"&&request.method==="DELETE")return resetProfileData(request,env);
     if(url.pathname==="/api/topics"&&request.method==="GET")return getTopics(request,env);
     if(url.pathname==="/api/topics"&&request.method==="POST")return createTopic(request,env);
     if(url.pathname==="/api/memory"&&request.method==="GET")return getMemory(request,env);
