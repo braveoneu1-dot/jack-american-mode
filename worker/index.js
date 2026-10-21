@@ -47,7 +47,7 @@ const voiceEnhancement=`
   addReplayControls(analogyReplay?.parentElement,'playAnalogyNative','playAnalogySlow',()=>document.getElementById('analogyModel')?.textContent||'');
   document.querySelectorAll('.nav-item,.record-button').forEach(button=>button.addEventListener('click',stopNeural,true));
   document.getElementById('soundToggle')?.addEventListener('click',()=>{if(!soundOn)stopNeural();});
-  fetch('/api/health').then(response=>response.json()).then(data=>{neuralVoiceReady=Boolean(data.voiceConfigured);document.querySelector('.status').innerHTML='<i></i> '+(data.configured?(neuralVoiceReady?(data.coachProvider||'AI').toUpperCase()+' + NEURAL VOICE':(data.coachProvider||'AI').toUpperCase()+' READY'):'AI COACH NOT CONFIGURED');}).catch(()=>{});
+  fetch('/api/health').then(response=>response.json()).then(data=>{neuralVoiceReady=Boolean(data.voiceConfigured);document.querySelector('.status').innerHTML='<i></i> '+(data.configured?'COACH READY':'COACH OFFLINE');}).catch(()=>{});
 })();
 </script>`;
 const realtimePanel=`<section class="workspace" id="analogyPanel">
@@ -481,6 +481,8 @@ const enhancedPage=page
   .replace('<b>Coach My<br/>English</b>','<b>Live<br/>Conversation</b>')
   .replace('<div class="date" id="today"></div>','<span class="profile-badge" id="profileBadge">CREATING PRIVATE PROFILE…</span><div class="date" id="today"></div>')
   .replace('</main>','</main><button type="button" class="floating-refresh" id="refreshApp" aria-label="Refresh app"><span aria-hidden="true">↻</span> REFRESH</button>')
+  .replace("document.querySelector('.status').innerHTML='<i></i> '+(data.provider==='claude-fallback'?'CLAUDE FALLBACK':'DEEPSEEK ACTIVE');","document.querySelector('.status').innerHTML='<i></i> COACH READY';")
+  .replace("document.querySelector('.status').innerHTML=\`<i></i> \${data.configured?(data.coachProvider||'AI').toUpperCase()+' READY':'AI COACH NOT CONFIGURED'}\`;","document.querySelector('.status').innerHTML='<i></i> '+(data.configured?'COACH READY':'COACH OFFLINE');")
   .replace("pressureIndex=(pressureIndex+1)%conversations.length","pressureIndex=nextBankIndex('pressure',pressureIndex,conversations.length)")
   .replace("upgradeIndex=(upgradeIndex+1)%rewrites.length","upgradeIndex=nextBankIndex('upgrade',upgradeIndex,rewrites.length)")
   .replace('<meta name="theme-color" content="#091019" />','<meta name="theme-color" content="#111c35" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" /><meta name="apple-mobile-web-app-title" content="Jack AM" /><meta name="format-detection" content="telephone=no" /><link rel="manifest" href="/manifest.webmanifest?v=2" /><link rel="apple-touch-icon" sizes="180x180" href="/app-icon-v3-180.png" />')
