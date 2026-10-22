@@ -795,7 +795,7 @@ function agentConfiguration(name,voiceId,safe=false){
     conversationConfig.tts={voice_id:voiceId};
   }else{
     conversationConfig.asr={quality:"high",provider:"scribe_realtime",user_input_audio_format:"pcm_48000"};
-    conversationConfig.turn={turn_timeout:4,silence_end_call_timeout:-1,turn_eagerness:"eager",spelling_patience:"auto",speculative_turn:true,retranscribe_on_turn_timeout:false,turn_model:"turn_v3",mode:"turn"};
+    conversationConfig.turn={turn_timeout:4,silence_end_call_timeout:-1,turn_eagerness:"normal",spelling_patience:"auto",speculative_turn:true,retranscribe_on_turn_timeout:false,turn_model:"turn_v3",mode:"turn"};
     conversationConfig.tts={model_id:"eleven_flash_v2_5",voice_id:voiceId,agent_output_audio_format:"pcm_48000",optimize_streaming_latency:3,stability:0.42,speed:1,similarity_boost:0.78};
     conversationConfig.conversation.client_events=["audio","interruption","user_transcript","agent_response"];
     conversationConfig.language_presets={ja:{overrides:{agent:{first_message:"やあ。今日は何について話そうか？ 英語でも日本語でも大丈夫だよ。"}}}};
